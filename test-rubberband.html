@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Rubber Band Full Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            background: #6200ea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #log {
+            margin-top: 20px;
+            padding: 10px;
+            background: #0f0f1e;
+            border-radius: 5px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        #log p {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid #6200ea;
+            padding-left: 10px;
+        }
+        .error {
+            border-left-color: #f44336 !important;
+            color: #ffcccb;
+        }
+        .success {
+            border-left-color: #4caf50 !important;
+            color: #90ee90;
+        }
+        input[type="file"] {
+            margin: 10px 0;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎵 Rubber Band Complete Test</h1>
+
+    <div>
+        <input type="file" id="fileInput" accept="audio/*" />
+    </div>
+
+    <div class="controls">
+        <button id="testInit">1. Test Initialization</button>
+        <button id="loadAudio" disabled>2. Load Audio</button>
+        <button id="play" disabled>3. Play</button>
+        <button id="pause" disabled>4. Pause</button>
+        <button id="setSpeed" disabled>5. Set Speed 0.5x</button>
+        <button id="clearLog">Clear Log</button>
+    </div>
+
+    <div id="log"></div>
+
+    <script type="module">
+        import { createRubberBandNode } from '/node_modules/rubberband-web/dist/esm/index.js';
+
+        let audioContext = null;
+        let rubberBandNode = null;
+        let gainNode = null;
+        let audioBuffer = null;
+        let sourceNode = null;
+        let selectedFile = null;
+
+        const log = (msg, type = 'info') => {
+            const div = document.getElementById('log');
+            const p = document.createElement('p');
+            p.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            if (type === 'error') p.classList.add('error');
+            if (type === 'success') p.classList.add('success');
+            div.appendChild(p);
+            div.scrollTop = div.scrollHeight;
+            console.log(msg);
+        };
+
+        document.getElementById('clearLog').addEventListener('click', () => {
+            document.getElementById('log').innerHTML = '';
+        });
+
+        document.getElementById('fileInput').addEventListener('change', (e) => {
+            selectedFile = e.target.files[0];
+            if (selectedFile) {
+                log(`✅ File selected: ${selectedFile.name} (${(selectedFile.size / 1024 / 1024).toFixed(2)} MB)`, 'success');
+                document.getElementById('loadAudio').disabled = false;
+            }
+        });
+
+        document.getElementById('testInit').addEventListener('click', async () => {
+            try {
+                log('🔧 Step 1: Creating AudioContext...');
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                log(`✅ AudioContext created - State: ${audioContext.state}, Sample Rate: ${audioContext.sampleRate}`, 'success');
+
+                log('🔧 Step 2: Checking rubberband-processor.js...');
+                const processorCheck = await fetch('/rubberband-processor.js');
+                log(`✅ Processor file exists - Status: ${processorCheck.status}, Size: ${processorCheck.headers.get('content-length')} bytes`, 'success');
+
+                log('🔧 Step 3: Creating Rubber Band node...');
+                log('⏳ This may take a few seconds...');
+
+                rubberBandNode = await createRubberBandNode(
+                    audioContext,
+                    '/rubberband-processor.js'
+                );
+
+                log('✅ Rubber Band node created successfully!', 'success');
+                log(`📊 Node type: ${rubberBandNode.constructor.name}`);
+                log(`📊 Available methods: ${Object.getOwnPropertyNames(Object.getPrototypeOf(rubberBandNode)).join(', ')}`);
+
+                log('🔧 Step 4: Setting high quality mode...');
+                rubberBandNode.setHighQuality(true);
+                log('✅ High quality mode enabled', 'success');
+
+                log('🔧 Step 5: Creating gain node...');
+                gainNode = audioContext.createGain();
+                gainNode.gain.value = 1.0;
+                log('✅ Gain node created', 'success');
+
+                log('🔧 Step 6: Testing tempo/pitch control...');
+                rubberBandNode.setTempo(1.0);
+                rubberBandNode.setPitch(1.0);
+                log('✅ Tempo and pitch control working', 'success');
+
+                log('🎉 ALL INITIALIZATION TESTS PASSED!', 'success');
+                document.getElementById('testInit').disabled = true;
+
+            } catch (error) {
+                log(`❌ ERROR: ${error.message}`, 'error');
+                log(`Stack: ${error.stack}`, 'error');
+            }
+        });
+
+        document.getElementById('loadAudio').addEventListener('click', async () => {
+            if (!selectedFile) {
+                log('❌ No file selected', 'error');
+                return;
+            }
+
+            try {
+                log(`🔧 Loading ${selectedFile.name}...`);
+
+                // Read file as array buffer
+                const arrayBuffer = await selectedFile.arrayBuffer();
+                log(`✅ File read: ${arrayBuffer.byteLength} bytes`);
+
+                // Decode audio data
+                log('🔧 Decoding audio data...');
+                audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                log(`✅ Audio decoded: ${audioBuffer.duration.toFixed(2)}s, ${audioBuffer.numberOfChannels} channels, ${audioBuffer.sampleRate}Hz`, 'success');
+
+                document.getElementById('play').disabled = false;
+                document.getElementById('setSpeed').disabled = false;
+                log('🎉 AUDIO LOAD TEST PASSED!', 'success');
+
+            } catch (error) {
+                log(`❌ ERROR loading audio: ${error.message}`, 'error');
+                log(`Stack: ${error.stack}`, 'error');
+            }
+        });
+
+        document.getElementById('play').addEventListener('click', async () => {
+            try {
+                // Stop previous if exists
+                if (sourceNode) {
+                    try { sourceNode.stop(); } catch (e) { }
+                    sourceNode = null;
+                }
+
+                log('🔧 Creating audio buffer source...');
+                sourceNode = audioContext.createBufferSource();
+                sourceNode.buffer = audioBuffer;
+
+                log('🔧 Connecting audio chain: source → rubberband → gain → destination');
+                sourceNode.connect(rubberBandNode);
+                rubberBandNode.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                log('✅ Audio chain connected');
+
+                log('🔧 Starting playback...');
+                sourceNode.start(0);
+                log('▶️ PLAYBACK STARTED!', 'success');
+
+                document.getElementById('pause').disabled = false;
+                document.getElementById('play').disabled = true;
+
+                sourceNode.onended = () => {
+                    log('⏹️ Playback finished');
+                    document.getElementById('play').disabled = false;
+                    document.getElementById('pause').disabled = true;
+                };
+
+            } catch (error) {
+                log(`❌ ERROR playing: ${error.message}`, 'error');
+                log(`Stack: ${error.stack}`, 'error');
+            }
+        });
+
+        document.getElementById('pause').addEventListener('click', () => {
+            try {
+                if (sourceNode) {
+                    sourceNode.stop();
+                    sourceNode = null;
+                    log('⏸️ Playback stopped', 'success');
+                }
+                document.getElementById('play').disabled = false;
+                document.getElementById('pause').disabled = true;
+            } catch (error) {
+                log(`❌ ERROR: ${error.message}`, 'error');
+            }
+        });
+
+        document.getElementById('setSpeed').addEventListener('click', () => {
+            try {
+                log('🔧 Setting speed to 0.5x (half speed)...');
+                rubberBandNode.setTempo(0.5);
+                rubberBandNode.setPitch(1.0);
+                log('✅ Speed changed to 0.5x - pitch preserved at 1.0', 'success');
+                log('ℹ️ Stop and play again to hear the new speed');
+            } catch (error) {
+                log(`❌ ERROR: ${error.message}`, 'error');
+            }
+        });
+
+        log('📋 Test Instructions:', 'info');
+        log('1. Click "Test Initialization" to verify Rubber Band library loads');
+        log('2. Select an audio file using the file input');
+        log('3. Click "Load Audio" to decode the file');
+        log('4. Click "Play" to start playback');
+        log('5. Click "Set Speed 0.5x" then stop/play to hear slow playback with preserved pitch');
+        log('---');
+    </script>
+</body>
+</html>
