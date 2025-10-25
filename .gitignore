@@ -12,8 +12,12 @@ dist
 dist-ssr
 *.local
 
-# Backend (no longer needed)
-server/
+# Backend - ignore build outputs and temporary files
+server/node_modules/
+server/dist/
+server/*.db
+server/*-player-script.js
+server/.env
 
 # Editor directories and files
 .vscode/*
