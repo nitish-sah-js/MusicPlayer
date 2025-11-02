@@ -15,6 +15,7 @@ export interface RubberBandControls {
   pause: () => void
   seek: (time: number) => void
   setSpeed: (speed: number) => void
+  setPitch: (pitch: number) => void
   setVolume: (volume: number) => void
   setLoopPoints: (start: number | null, end: number | null) => void
   reset: () => void
@@ -37,6 +38,7 @@ export const useRubberBand = () => {
   const startTimeRef = useRef<number>(0)
   const pauseTimeRef = useRef<number>(0)
   const currentSpeedRef = useRef<number>(1)
+  const currentPitchRef = useRef<number>(1.0)
   const currentVolumeRef = useRef<number>(1)
   const loopStartRef = useRef<number | null>(null)
   const loopEndRef = useRef<number | null>(null)
@@ -96,7 +98,7 @@ export const useRubberBand = () => {
           // Connect ONLY source → rubberband (rest of chain already connected)
           sourceNode.connect(rubberBandNodeRef.current)
           rubberBandNodeRef.current.setTempo(currentSpeedRef.current)
-          rubberBandNodeRef.current.setPitch(1.0)
+          rubberBandNodeRef.current.setPitch(currentPitchRef.current)
           sourceNode.start(0, loopStartRef.current)
           sourceNodeRef.current = sourceNode
           startTimeRef.current = audioContextRef.current!.currentTime
@@ -141,13 +143,25 @@ export const useRubberBand = () => {
     try {
       console.log('🔵 [RubberBand] loadAudio() called with file:', file.name, file.size, 'bytes')
 
+      // Stop any existing playback first
+      if (sourceNodeRef.current) {
+        try {
+          sourceNodeRef.current.stop()
+        } catch (e) {
+          // Ignore
+        }
+        sourceNodeRef.current = null
+      }
+
       setState(prev => ({
         ...prev,
         error: null,
         isLoaded: false,
+        isPlaying: false,
+        currentTime: 0,
       }))
 
-      // Initialize audio context if not already done
+      // Initialize audio context ONCE
       if (!audioContextRef.current) {
         console.log('🔵 [RubberBand] Creating new AudioContext...')
         audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
@@ -163,7 +177,7 @@ export const useRubberBand = () => {
         console.log('✅ [RubberBand] AudioContext resumed - State:', audioContextRef.current.state)
       }
 
-      // Initialize Rubber Band node if not already done
+      // Initialize Rubber Band node ONCE
       if (!rubberBandNodeRef.current) {
         console.log('🔵 [RubberBand] Creating Rubber Band node...')
         console.log('⏳ [RubberBand] This may take a few seconds...')
@@ -174,36 +188,24 @@ export const useRubberBand = () => {
         )
 
         console.log('✅ [RubberBand] Rubber Band node created successfully')
-        console.log('📊 [RubberBand] Node type:', rubberBandNodeRef.current.constructor.name)
 
         // Enable high quality mode
         rubberBandNodeRef.current.setHighQuality(true)
         console.log('✅ [RubberBand] High quality mode enabled')
-      } else {
-        console.log('✅ [RubberBand] Using existing Rubber Band node')
-      }
 
-      // Create gain node for volume control if not already done
-      if (!gainNodeRef.current) {
-        console.log('🔵 [RubberBand] Creating gain node...')
+        // Create gain node ONCE
         gainNodeRef.current = audioContextRef.current.createGain()
         gainNodeRef.current.gain.value = currentVolumeRef.current
         console.log('✅ [RubberBand] Gain node created with volume:', currentVolumeRef.current)
+
+        // Connect the persistent audio processing chain ONCE: rubberband -> gain -> destination
+        console.log('🔵 [RubberBand] Setting up persistent audio processing chain...')
+        rubberBandNodeRef.current.connect(gainNodeRef.current)
+        gainNodeRef.current.connect(audioContextRef.current.destination)
+        console.log('✅ [RubberBand] Persistent audio processing chain established')
       } else {
-        console.log('✅ [RubberBand] Using existing gain node with volume:', gainNodeRef.current.gain.value)
+        console.log('✅ [RubberBand] Using existing Rubber Band node and gain node')
       }
-
-      // Connect the persistent audio processing chain ONCE: rubberband -> gain -> destination
-      // Note: We connect the source node later in play(), but the processing chain stays connected
-      console.log('🔵 [RubberBand] Setting up persistent audio processing chain...')
-      console.log('   - Disconnecting any existing connections...')
-      rubberBandNodeRef.current.disconnect()
-      gainNodeRef.current.disconnect()
-
-      console.log('   - Connecting: rubberband → gain → destination')
-      rubberBandNodeRef.current.connect(gainNodeRef.current)
-      gainNodeRef.current.connect(audioContextRef.current.destination)
-      console.log('✅ [RubberBand] Persistent audio processing chain established')
 
       // Read file as array buffer
       console.log('🔵 [RubberBand] Reading file as array buffer...')
@@ -214,6 +216,7 @@ export const useRubberBand = () => {
       console.log('🔵 [RubberBand] Decoding audio data...')
       const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer)
       audioBufferRef.current = audioBuffer
+      pauseTimeRef.current = 0 // Reset playback position
       console.log('✅ [RubberBand] Audio decoded:', audioBuffer.duration.toFixed(2), 'seconds,', audioBuffer.numberOfChannels, 'channels,', audioBuffer.sampleRate, 'Hz')
 
       setState(prev => ({
@@ -277,11 +280,11 @@ export const useRubberBand = () => {
       sourceNode.connect(rubberBandNodeRef.current)
       console.log('✅ [RubberBand] Source connected to audio processing chain')
 
-      // Set tempo (speed) - keep pitch at 1.0 for pitch preservation
+      // Set tempo (speed) and pitch
       console.log('🔵 [RubberBand] Setting tempo:', currentSpeedRef.current, 'x')
       rubberBandNodeRef.current.setTempo(currentSpeedRef.current)
-      console.log('🔵 [RubberBand] Setting pitch: 1.0 (preserved)')
-      rubberBandNodeRef.current.setPitch(1.0)
+      console.log('🔵 [RubberBand] Setting pitch:', currentPitchRef.current)
+      rubberBandNodeRef.current.setPitch(currentPitchRef.current)
       console.log('✅ [RubberBand] Tempo and pitch configured')
 
       // Start from current position
@@ -351,7 +354,7 @@ export const useRubberBand = () => {
           // Connect ONLY source → rubberband (rest of chain already connected)
           sourceNode.connect(rubberBandNodeRef.current)
           rubberBandNodeRef.current.setTempo(currentSpeedRef.current)
-          rubberBandNodeRef.current.setPitch(1.0)
+          rubberBandNodeRef.current.setPitch(currentPitchRef.current)
           sourceNode.start(0, pauseTimeRef.current)
           sourceNodeRef.current = sourceNode
           startTimeRef.current = audioContextRef.current!.currentTime
@@ -370,48 +373,87 @@ export const useRubberBand = () => {
 
   const setSpeed = useCallback((speed: number) => {
     currentSpeedRef.current = speed
+    console.log('🎵 Speed changing to', speed, 'x')
 
-    if (rubberBandNodeRef.current) {
-      rubberBandNodeRef.current.setTempo(speed)
-    }
-
-    // If playing, restart to apply new speed
+    // Always stop and restart to avoid buffer overrun issues
     setState(prev => {
-      if (prev.isPlaying) {
-        const currentTime = prev.currentTime
+      const wasPlaying = prev.isPlaying
+      const currentTime = prev.currentTime
 
-        // Stop current playback
-        if (sourceNodeRef.current) {
-          try {
-            sourceNodeRef.current.stop()
-          } catch (e) {
-            // Ignore
-          }
-          sourceNodeRef.current = null
+      // Stop current playback
+      if (sourceNodeRef.current) {
+        try {
+          sourceNodeRef.current.stop()
+        } catch (e) {
+          // Ignore
         }
+        sourceNodeRef.current = null
+      }
 
-        pauseTimeRef.current = currentTime
+      pauseTimeRef.current = currentTime
 
-        // Restart with new speed
+      // Restart with new speed if was playing
+      if (wasPlaying) {
         setTimeout(() => {
           if (audioContextRef.current && audioBufferRef.current && rubberBandNodeRef.current && gainNodeRef.current) {
             const sourceNode = audioContextRef.current.createBufferSource()
             sourceNode.buffer = audioBufferRef.current
-            // Connect ONLY source → rubberband (rest of chain already connected)
             sourceNode.connect(rubberBandNodeRef.current)
             rubberBandNodeRef.current.setTempo(currentSpeedRef.current)
-            rubberBandNodeRef.current.setPitch(1.0)
+            rubberBandNodeRef.current.setPitch(currentPitchRef.current)
             sourceNode.start(0, pauseTimeRef.current)
             sourceNodeRef.current = sourceNode
             startTimeRef.current = audioContextRef.current.currentTime
-            setState(prev => ({ ...prev, isPlaying: true }))
-            console.log('🎵 Speed changed to', currentSpeedRef.current, 'x')
+            setState(prev => ({ ...prev, isPlaying: true, currentTime: pauseTimeRef.current }))
+            console.log('✅ Speed changed to', currentSpeedRef.current, 'x, restarted at', pauseTimeRef.current, 's')
           }
-        }, 10)
-
-        return { ...prev, isPlaying: false }
+        }, 50) // Increased delay to prevent buffer issues
       }
-      return prev
+
+      return { ...prev, isPlaying: false, currentTime }
+    })
+  }, [])
+
+  const setPitch = useCallback((pitch: number) => {
+    currentPitchRef.current = pitch
+    console.log('🎵 Pitch changing to', pitch)
+
+    // Always stop and restart to avoid buffer overrun issues
+    setState(prev => {
+      const wasPlaying = prev.isPlaying
+      const currentTime = prev.currentTime
+
+      // Stop current playback
+      if (sourceNodeRef.current) {
+        try {
+          sourceNodeRef.current.stop()
+        } catch (e) {
+          // Ignore
+        }
+        sourceNodeRef.current = null
+      }
+
+      pauseTimeRef.current = currentTime
+
+      // Restart with new pitch if was playing
+      if (wasPlaying) {
+        setTimeout(() => {
+          if (audioContextRef.current && audioBufferRef.current && rubberBandNodeRef.current && gainNodeRef.current) {
+            const sourceNode = audioContextRef.current.createBufferSource()
+            sourceNode.buffer = audioBufferRef.current
+            sourceNode.connect(rubberBandNodeRef.current)
+            rubberBandNodeRef.current.setTempo(currentSpeedRef.current)
+            rubberBandNodeRef.current.setPitch(currentPitchRef.current)
+            sourceNode.start(0, pauseTimeRef.current)
+            sourceNodeRef.current = sourceNode
+            startTimeRef.current = audioContextRef.current.currentTime
+            setState(prev => ({ ...prev, isPlaying: true, currentTime: pauseTimeRef.current }))
+            console.log('✅ Pitch changed to', currentPitchRef.current, ', restarted at', pauseTimeRef.current, 's')
+          }
+        }, 50) // Increased delay to prevent buffer issues
+      }
+
+      return { ...prev, isPlaying: false, currentTime }
     })
   }, [])
 
@@ -457,6 +499,7 @@ export const useRubberBand = () => {
     pause,
     seek,
     setSpeed,
+    setPitch,
     setVolume,
     setLoopPoints,
     reset,

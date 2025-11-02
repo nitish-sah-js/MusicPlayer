@@ -41,18 +41,23 @@ npm start            # Run compiled JavaScript from dist/
 
 **Player Components**:
 - `YouTubePlayer.tsx`: YouTube video playback using react-youtube wrapper, implements custom controls with speed and A-B loop
-- `LocalFilePlayer.tsx`: Dual-mode audio player with:
-  - **Quick Preview Mode**: WaveSurfer.js with browser's basic time-stretching (instant playback, may have artifacts)
-  - **Studio Quality Mode**: rubberband-web with professional Rubber Band algorithm (zero artifacts, perfect pitch preservation)
-  - Drag-and-drop file upload, waveform visualization, A-B loop, and FFmpeg export
+- `LocalFilePlayer.tsx`: Professional audio player with hybrid architecture:
+  - **Playback Engine**: rubberband-web (Rubber Band library via Web Audio API + WASM) for professional pitch-preserved audio
+  - **Visualization**: WaveSurfer.js for waveform display (visualization only, no audio playback)
+  - **Features**: Drag-and-drop file upload, A-B loop, independent tempo/pitch control, FFmpeg export
+  - **Quality**: Zero artifacts, perfect pitch preservation, studio-grade frequency-domain algorithm
 - `KeyboardShortcutsHelp.tsx`: Modal component displaying all available keyboard shortcuts with responsive design
 
 **Core Functionality**:
 - `useFFmpeg.ts`: Hook managing FFmpeg WASM loading and audio export. Uses chained `atempo` filters for speeds outside 0.5-2.0 range
-- `useRubberBand.ts`: Hook managing Rubber Band Web Audio API node for professional pitch-preserved playback with looping support
+- `useRubberBand.ts`: Hook managing Rubber Band Web Audio API node for professional pitch-preserved playback
+  - Provides controls: `loadAudio`, `play`, `pause`, `seek`, `setSpeed`, `setPitch`, `setVolume`, `setLoopPoints`, `reset`
+  - State tracking: `isLoaded`, `isPlaying`, `currentTime`, `duration`, `error`
+  - Automatic A-B loop handling with seamless looping
+  - Independent tempo and pitch control via `setTempo()` and `setPitch()` API methods
 - `ThemeContext.tsx`: Dark/light mode theme management
 
-**Note**: Authentication system is fully implemented (AuthContext, JWT, backend routes) but currently not actively used in the main player UI. The infrastructure exists for future user accounts and preset saving features.
+**Note**: Authentication system is implemented on the backend (JWT auth, database schema for users/presets) but has no frontend implementation yet. The backend infrastructure exists for future user accounts and preset saving features.
 
 ### Backend Structure
 
@@ -86,18 +91,25 @@ Both players implement A-B repeat looping by:
 4. YouTube version uses polling interval, WaveSurfer uses `audioprocess` event
 
 **Pitch Preservation**:
-- **Local Files - Quick Preview Mode**: Uses WaveSurfer's `setPlaybackRate(speed, true)` with browser's basic time-stretching (may have robotic/artificial artifacts)
-- **Local Files - Studio Quality Mode**: Uses Rubber Band library via rubberband-web (professional frequency-domain algorithm, zero artifacts, same quality as competitors)
+- **Local Files**: Uses Rubber Band library via rubberband-web (professional frequency-domain algorithm, zero artifacts, perfect pitch preservation)
+  - Tempo control via `setTempo(speed)` - maintains original pitch
+  - Independent pitch shift via `setPitch(2^(semitones/12))` - changes pitch without affecting tempo
+  - Both can be combined for creative audio manipulation
 - **YouTube**: Native API doesn't support pitch preservation - displays warning notice to users when speed ≠ 1x
 
-**Rubber Band Integration** (Studio Quality Mode):
+**Rubber Band Integration**:
 - Uses `rubberband-web` npm package (GPL-2.0 license, free/open-source)
 - Requires `public/rubberband-processor.js` AudioWorklet processor file
-- Web Audio API architecture: AudioBuffer → AudioBufferSourceNode → RubberBandNode → AudioContext.destination
-- Supports real-time tempo changes via `setTempo()`, maintains pitch at 1.0 via `setPitch(1.0)`
-- WaveSurfer used only for waveform visualization (seekTo synced with Rubber Band playback position)
-- Small loading delay (1-2 seconds) when switching to Studio mode or loading new audio
-- A-B loop implemented by checking playback time and seeking back to loop start
+- Web Audio API architecture: AudioBuffer → AudioBufferSourceNode → RubberBandNode → GainNode → AudioContext.destination
+- **Hybrid Architecture**:
+  - Rubber Band handles all audio playback (tempo, pitch, looping)
+  - WaveSurfer used only for waveform visualization with `interact: false`
+  - WaveSurfer cursor position synced to Rubber Band via `seekTo()` on every playback frame
+  - All user interactions (play, pause, seek, tempo, pitch) go through Rubber Band controls
+- Tempo control: `setTempo(speed)` - real-time speed changes (0.25x - 2x)
+- Pitch control: `setPitch(pitchRatio)` - independent pitch shifting via semitone calculation
+- Small loading delay (1-2 seconds) on first file load while Rubber Band initializes
+- A-B loop implemented by checking playback time and automatically restarting at loop start point
 
 **FFmpeg Audio Export**:
 - FFmpeg loads asynchronously via CDN (unpkg.com) as WASM
@@ -116,16 +128,16 @@ Both players support comprehensive keyboard controls:
 - Space: Play/Pause
 - Arrow keys: Left/Right (seek ±5s), Up/Down (speed ±0.25x)
 - 1-8: Speed presets (0.25x - 2x)
-- A/B/C: Set loop start, set loop end, clear loop
+- A/B/C: Set loop start, set loop end, clear loop (LocalFilePlayer auto-enables loop when both points are set)
 - ?: Toggle shortcuts help modal
 - Event listeners filter out input fields to prevent conflicts
 
-**Authentication Flow**:
-1. User logs in/signs up via `AuthModal`
-2. Backend returns JWT token
-3. Token stored in localStorage and added to all API requests
-4. On app load, `AuthContext` attempts to fetch user with stored token
-5. Invalid/missing token results in unauthenticated state
+**Authentication Flow** (Backend only - no frontend implementation):
+1. Backend provides `/api/auth/signup` and `/api/auth/login` endpoints
+2. Backend returns JWT token upon successful authentication
+3. Protected endpoints (`/api/auth/me`, `/api/presets/*`) require `Authorization: Bearer <token>` header
+4. `verifyToken` middleware validates JWT and adds `userId` to request object
+5. Frontend implementation (AuthContext, login/signup UI) not yet implemented
 
 ## Environment Setup
 
@@ -147,9 +159,9 @@ JWT_SECRET=your_secret_key_here
 - No state management library - using built-in React context
 
 **TypeScript Interfaces**:
-- Shared types defined in `api/client.ts` (User, Preset)
 - Backend uses `any` type casts for database queries (better-sqlite3 doesn't provide typed results out of box)
-- Express extended with `AuthRequest` interface for authenticated routes
+- Express extended with `AuthRequest` interface (in `auth.ts`) for authenticated routes
+- Frontend components use local type definitions (no shared types file)
 
 **Tailwind Theming**:
 - Uses `class`-based dark mode (not media query)

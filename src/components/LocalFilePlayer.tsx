@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 import { Play, Pause, SkipBack, SkipForward, Upload, X, Repeat, Download, Keyboard } from 'lucide-react'
 import { useFFmpeg } from '../hooks/useFFmpeg'
+import { useTonePlayer } from '../hooks/useTonePlayer'
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp'
 
 export default function LocalFilePlayer() {
@@ -10,22 +11,75 @@ export default function LocalFilePlayer() {
   const [pitch, setPitch] = useState(0) // Pitch shift in semitones (-12 to +12)
   const [volume, setVolume] = useState(1)
   const [isDragging, setIsDragging] = useState(false)
-  const [loopEnabled, setLoopEnabled] = useState(false)
   const [loopStart, setLoopStart] = useState<number | null>(null)
   const [loopEnd, setLoopEnd] = useState<number | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const [exportFormat, setExportFormat] = useState<'mp3' | 'wav' | 'ogg'>('mp3')
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false)
+  const [notification, setNotification] = useState<string | null>(null)
+  const [isShiftPressed, setIsShiftPressed] = useState(false)
+  const [supportedFormats, setSupportedFormats] = useState<string[]>([])
+
+  // Detect supported audio formats
+  useEffect(() => {
+    const audio = document.createElement('audio')
+    const formats: string[] = []
+
+    const testFormats = [
+      { type: 'audio/mpeg', name: 'MP3' },
+      { type: 'audio/wav', name: 'WAV' },
+      { type: 'audio/ogg', name: 'OGG' },
+      { type: 'audio/mp4', name: 'M4A' },
+      { type: 'audio/flac', name: 'FLAC' },
+      { type: 'audio/aac', name: 'AAC' },
+      { type: 'audio/webm', name: 'WebM' },
+    ]
+
+    testFormats.forEach(({ type, name }) => {
+      if (audio.canPlayType(type)) {
+        formats.push(name)
+      }
+    })
+
+    setSupportedFormats(formats)
+  }, [])
 
   const waveformRef = useRef<HTMLDivElement>(null)
   const wavesurferRef = useRef<WaveSurfer | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { loaded: ffmpegLoaded, loading: ffmpegLoading, exportAudio } = useFFmpeg()
 
-  // WaveSurfer state tracking
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0)
-  const [duration, setDuration] = useState(0)
+  // Tone.js for professional audio playback
+  const { state: toneState, controls: toneControls } = useTonePlayer()
+
+  // Derived state from Tone.js
+  const isPlaying = toneState.isPlaying
+  const currentTime = toneState.currentTime
+  const duration = toneState.duration
+  const loopEnabled = loopStart !== null && loopEnd !== null
+
+  // Show notification temporarily
+  const showNotification = (message: string) => {
+    setNotification(message)
+    setTimeout(() => setNotification(null), 2000)
+  }
+
+  // Track shift key for fine-tune mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') setIsShiftPressed(true)
+    }
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') setIsShiftPressed(false)
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -94,6 +148,33 @@ export default function LocalFilePlayer() {
           e.preventDefault()
           setShowShortcutsHelp(prev => !prev)
           break
+        case 'r':
+          e.preventDefault()
+          handleTempoChange(1)
+          handlePitchChange(0)
+          showNotification('Reset to Normal Speed & Pitch')
+          break
+        case 'l':
+          e.preventDefault()
+          if (loopEnabled) {
+            handleClearLoop()
+            showNotification('Loop Disabled')
+          } else if (loopStart !== null) {
+            showNotification('Set Loop End Point (B) first')
+          } else {
+            showNotification('Set Loop Points (A & B) first')
+          }
+          break
+        case 'm':
+          e.preventDefault()
+          if (volume === 0) {
+            setVolume(1)
+            showNotification('Unmuted')
+          } else {
+            setVolume(0)
+            showNotification('Muted')
+          }
+          break
       }
     }
 
@@ -101,107 +182,132 @@ export default function LocalFilePlayer() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [tempo, isPlaying, currentTime, loopStart, loopEnd, audioFile])
 
-  // Initialize WaveSurfer when audio file is loaded
+  // Initialize WaveSurfer for visualization only when audio file is loaded
   useEffect(() => {
     if (!audioFile || !waveformRef.current) return
 
-    // Destroy existing instance
+    // Destroy existing instance with proper cleanup
     if (wavesurferRef.current) {
-      wavesurferRef.current.destroy()
+      try {
+        wavesurferRef.current.destroy()
+      } catch (e) {
+        console.warn('Error destroying WaveSurfer:', e)
+      }
     }
 
-    // Create new WaveSurfer instance
+    // Create new WaveSurfer instance (visualization only - no audio)
     const wavesurfer = WaveSurfer.create({
       container: waveformRef.current,
-      waveColor: '#9333ea',
-      progressColor: '#a855f7',
-      cursorColor: '#c084fc',
+      waveColor: 'rgba(168, 85, 247, 0.4)', // More visible purple
+      progressColor: 'rgba(168, 85, 247, 1)', // Solid vibrant purple
+      cursorColor: 'rgba(236, 72, 153, 1)',
       barWidth: 2,
-      barRadius: 3,
+      barRadius: 2,
       cursorWidth: 2,
-      height: 100,
-      barGap: 2,
+      height: 80,
+      barGap: 1,
+      barHeight: 1, // Standard bar height
+      minPxPerSec: 50, // More detailed waveform
+      fillParent: true,
       responsive: true,
+      interact: true,
+      hideScrollbar: true,
+      backend: 'WebAudio',
+      normalize: true,
+      splitChannels: false,
+      mediaControls: false,
     })
 
     wavesurferRef.current = wavesurfer
 
-    // Load audio file
+    // Load audio file for visualization
     const fileUrl = URL.createObjectURL(audioFile)
     wavesurfer.load(fileUrl)
 
-    // Event listeners
-    wavesurfer.on('ready', () => {
-      setDuration(wavesurfer.getDuration())
+    // Handle waveform click to seek
+    wavesurfer.on('interaction', () => {
+      const clickedTime = wavesurfer.getCurrentTime()
+      toneControls.seek(clickedTime)
+      console.log('🎯 Seeked to', clickedTime.toFixed(2), 's via waveform click')
     })
 
-    wavesurfer.on('audioprocess', () => {
-      const time = wavesurfer.getCurrentTime()
-      setCurrentTime(time)
-
-      // Handle loop
-      if (loopEnabled && loopStart !== null && loopEnd !== null) {
-        if (time >= loopEnd) {
-          wavesurfer.seekTo(loopStart / wavesurfer.getDuration())
-          if (!wavesurfer.isPlaying()) {
-            wavesurfer.play()
-          }
-        }
-      }
-    })
-
-    wavesurfer.on('finish', () => {
-      setIsPlaying(false)
-    })
-
-    wavesurfer.on('play', () => {
-      setIsPlaying(true)
-    })
-
-    wavesurfer.on('pause', () => {
-      setIsPlaying(false)
-    })
+    // Load audio into Tone.js for playback
+    toneControls.loadAudio(audioFile)
 
     return () => {
-      wavesurfer.destroy()
-      URL.revokeObjectURL(fileUrl)
+      try {
+        wavesurfer.destroy()
+      } catch (e) {
+        console.warn('Error destroying WaveSurfer in cleanup:', e)
+      }
+      try {
+        URL.revokeObjectURL(fileUrl)
+      } catch (e) {
+        console.warn('Error revoking object URL:', e)
+      }
     }
-  }, [audioFile, loopEnabled, loopStart, loopEnd])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioFile]) // toneControls is stable
 
-  // Update playback rate when tempo or pitch changes
+  // Sync WaveSurfer cursor with Tone.js playback
   useEffect(() => {
-    if (wavesurferRef.current) {
-      // Calculate the combined playback rate
-      // Pitch shift: each semitone = 2^(1/12) ratio
-      const pitchRatio = Math.pow(2, pitch / 12)
-
-      // Combined rate = tempo * pitch ratio
-      // If pitch = 0, ratio = 1, so rate = tempo only
-      // If pitch != 0, we need to adjust playback rate
-      const playbackRate = tempo * pitchRatio
-
-      // WaveSurfer's preservesPitch parameter:
-      // true = maintain original pitch (ignore pitch changes from speed)
-      // false = allow pitch to change with speed
-      // For independent tempo/pitch control: always use preservesPitch=false
-      // and control pitch via the playback rate calculation
-      wavesurferRef.current.setPlaybackRate(playbackRate, false)
+    if (wavesurferRef.current && duration > 0) {
+      const progress = currentTime / duration
+      wavesurferRef.current.seekTo(progress)
     }
-  }, [tempo, pitch])
+  }, [currentTime, duration])
 
-  // Update volume
+  // Update Tone.js tempo when tempo slider changes
   useEffect(() => {
-    if (wavesurferRef.current) {
-      wavesurferRef.current.setVolume(volume)
+    if (toneState.isLoaded) {
+      toneControls.setSpeed(tempo)
     }
-  }, [volume])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tempo, toneState.isLoaded])
+
+  // Update Tone.js pitch when pitch slider changes
+  useEffect(() => {
+    if (toneState.isLoaded) {
+      toneControls.setPitch(pitch)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pitch, toneState.isLoaded])
+
+  // Update Tone.js volume
+  useEffect(() => {
+    if (toneState.isLoaded) {
+      toneControls.setVolume(volume)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [volume, toneState.isLoaded])
+
+  // Update Tone.js loop points
+  useEffect(() => {
+    if (toneState.isLoaded) {
+      toneControls.setLoopPoints(loopStart, loopEnd)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loopStart, loopEnd, toneState.isLoaded])
 
   const handleFileSelect = (file: File) => {
-    if (file && file.type.startsWith('audio/')) {
-      setAudioFile(file)
-    } else {
-      alert('Please select a valid audio file')
+    // Validate file type
+    const validTypes = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/m4a', 'audio/flac', 'audio/aac', 'audio/webm']
+    const isValidType = file.type.startsWith('audio/') || validTypes.some(type => file.name.toLowerCase().endsWith(type.split('/')[1]))
+
+    if (!isValidType) {
+      showNotification('❌ Invalid file type. Please select an audio file.')
+      return
     }
+
+    // Validate file size (max 500MB)
+    const maxSize = 500 * 1024 * 1024
+    if (file.size > maxSize) {
+      showNotification('❌ File too large. Maximum size is 500MB.')
+      return
+    }
+
+    setAudioFile(file)
+    showNotification(`✅ Loaded: ${file.name}`)
   }
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -223,72 +329,114 @@ export default function LocalFilePlayer() {
     e.preventDefault()
     setIsDragging(false)
     const file = e.dataTransfer.files[0]
-    if (file) handleFileSelect(file)
+    if (file) {
+      handleFileSelect(file)
+    } else {
+      showNotification('❌ No file detected. Please try again.')
+    }
   }
 
   const togglePlayPause = () => {
-    if (wavesurferRef.current) {
-      wavesurferRef.current.playPause()
+    if (!toneState.isLoaded) {
+      showNotification('⚠️ Audio not loaded yet. Please wait...')
+      return
+    }
+    if (isPlaying) {
+      toneControls.pause()
+    } else {
+      toneControls.play()
     }
   }
 
   const handleSeek = (seconds: number) => {
-    if (wavesurferRef.current) {
-      const newTime = Math.max(0, Math.min(currentTime + seconds, duration))
-      wavesurferRef.current.seekTo(newTime / duration)
+    if (!toneState.isLoaded || duration === 0) {
+      showNotification('⚠️ Cannot seek: audio not loaded')
+      return
     }
+    const newTime = Math.max(0, Math.min(currentTime + seconds, duration))
+    toneControls.seek(newTime)
   }
 
   const handleTempoChange = (newTempo: number) => {
     setTempo(newTempo)
+    const presetName = speedOptions.find(opt => opt.value === newTempo)?.name
+    if (presetName) {
+      showNotification(`Speed: ${newTempo}x (${presetName})`)
+    } else {
+      showNotification(`Speed: ${newTempo}x`)
+    }
   }
 
   const handlePitchChange = (newPitch: number) => {
     setPitch(newPitch)
+    if (newPitch === 0) {
+      showNotification('Pitch: Original')
+    } else {
+      const pitchStr = newPitch % 1 === 0 ? newPitch.toString() : newPitch.toFixed(1)
+      showNotification(`Pitch: ${newPitch > 0 ? '+' : ''}${pitchStr} semitones`)
+    }
   }
 
   const handleRemoveFile = () => {
-    if (wavesurferRef.current) {
-      wavesurferRef.current.stop()
-    }
+    toneControls.reset()
     setAudioFile(null)
     setLoopStart(null)
     setLoopEnd(null)
-    setLoopEnabled(false)
+    setTempo(1)
+    setPitch(0)
+    setVolume(1)
   }
 
   const handleSetLoopStart = () => {
+    if (!toneState.isLoaded || duration === 0) {
+      showNotification('⚠️ Cannot set loop: audio not loaded')
+      return
+    }
     setLoopStart(currentTime)
     if (loopEnd === null || currentTime >= loopEnd) {
       setLoopEnd(null)
     }
+    showNotification(`✅ Loop Start (A) set at ${formatTime(currentTime)}`)
   }
 
   const handleSetLoopEnd = () => {
+    if (!toneState.isLoaded || duration === 0) {
+      showNotification('⚠️ Cannot set loop: audio not loaded')
+      return
+    }
     if (loopStart === null) {
-      alert('Please set loop start point first')
+      showNotification('⚠️ Please set loop start point first')
       return
     }
     if (currentTime <= loopStart) {
-      alert('Loop end must be after loop start')
+      showNotification('⚠️ Loop end must be after loop start')
       return
     }
     setLoopEnd(currentTime)
-    setLoopEnabled(true)
+    showNotification(`✅ Loop End (B) set at ${formatTime(currentTime)}`)
   }
 
   const handleClearLoop = () => {
-    setLoopEnabled(false)
     setLoopStart(null)
     setLoopEnd(null)
+    showNotification('✅ Loop cleared')
   }
 
   const handleExport = async () => {
-    if (!audioFile) return
+    if (!audioFile) {
+      showNotification('⚠️ No audio file loaded')
+      return
+    }
+
+    if (!ffmpegLoaded) {
+      showNotification('⚠️ FFmpeg not loaded. Please refresh the page.')
+      return
+    }
 
     setIsExporting(true)
 
     try {
+      showNotification('🎬 Exporting audio with FFmpeg...')
       const blob = await exportAudio(audioFile, tempo, exportFormat)
 
       if (blob) {
@@ -302,10 +450,13 @@ export default function LocalFilePlayer() {
         a.click()
         document.body.removeChild(a)
         URL.revokeObjectURL(url)
+        showNotification(`✅ Export complete: ${a.download}`)
+      } else {
+        showNotification('❌ Export failed: No output generated')
       }
     } catch (error) {
       console.error('Export failed:', error)
-      alert('Failed to export audio. Please try again.')
+      showNotification(`❌ Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
       setIsExporting(false)
     }
@@ -317,10 +468,28 @@ export default function LocalFilePlayer() {
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
-  const speedOptions = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
+  const speedOptions = [
+    { value: 0.25, label: '0.25x', name: 'Super Slow' },
+    { value: 0.5, label: '0.5x', name: 'Slow' },
+    { value: 0.75, label: '0.75x', name: 'Practice' },
+    { value: 1, label: '1x', name: 'Normal' },
+    { value: 1.25, label: '1.25x', name: 'Fast' },
+    { value: 1.5, label: '1.5x', name: 'Review' },
+    { value: 1.75, label: '1.75x', name: 'Faster' },
+    { value: 2, label: '2x', name: 'Max' },
+  ]
 
   return (
     <div className="space-y-4 sm:space-y-6">
+      {/* Notification Toast */}
+      {notification && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 animate-fade-in-down">
+          <div className="bg-purple-600 text-white px-6 py-3 rounded-lg shadow-lg font-semibold">
+            {notification}
+          </div>
+        </div>
+      )}
+
       {/* Keyboard Shortcuts Help Modal */}
       <KeyboardShortcutsHelp isOpen={showShortcutsHelp} onClose={() => setShowShortcutsHelp(false)} />
 
@@ -357,9 +526,15 @@ export default function LocalFilePlayer() {
             <p className="text-sm sm:text-base text-gray-400 mb-3 sm:mb-4">
               Drag and drop your audio file here, or click to browse
             </p>
-            <p className="text-xs sm:text-sm text-gray-500">
-              Supported formats: MP3, WAV, OGG, M4A, FLAC
-            </p>
+            {supportedFormats.length > 0 ? (
+              <p className="text-xs sm:text-sm text-gray-500">
+                Supported formats: {supportedFormats.join(', ')}
+              </p>
+            ) : (
+              <p className="text-xs sm:text-sm text-gray-500">
+                Detecting supported audio formats...
+              </p>
+            )}
             <input
               ref={fileInputRef}
               type="file"
@@ -393,8 +568,50 @@ export default function LocalFilePlayer() {
           </div>
 
           {/* Waveform */}
-          <div className="bg-black/30 rounded-lg p-3 sm:p-4">
-            <div ref={waveformRef} className="w-full" />
+          <div className="bg-gradient-to-b from-black/40 via-purple-900/10 to-black/40 rounded-lg p-4 sm:p-6 relative shadow-inner border border-white/5">
+            <div ref={waveformRef} className="w-full relative" style={{ minHeight: '80px' }} />
+
+            {/* Loop Point Markers */}
+            {duration > 0 && loopStart !== null && (
+              <div
+                className="absolute top-3 sm:top-4 bottom-3 sm:bottom-4 w-0.5 bg-blue-500 z-10"
+                style={{ left: `calc(${(loopStart / duration) * 100}% + 0.75rem)` }}
+              >
+                <div className="absolute -top-1 left-1/2 -translate-x-1/2 bg-blue-500 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap font-semibold">
+                  A
+                </div>
+              </div>
+            )}
+            {duration > 0 && loopEnd !== null && (
+              <div
+                className="absolute top-3 sm:top-4 bottom-3 sm:bottom-4 w-0.5 bg-green-500 z-10"
+                style={{ left: `calc(${(loopEnd / duration) * 100}% + 0.75rem)` }}
+              >
+                <div className="absolute -top-1 left-1/2 -translate-x-1/2 bg-green-500 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap font-semibold">
+                  B
+                </div>
+              </div>
+            )}
+            {duration > 0 && loopStart !== null && loopEnd !== null && (
+              <div
+                className="absolute top-3 sm:top-4 bottom-3 sm:bottom-4 bg-purple-500/20 border-l border-r border-purple-500/50 z-0"
+                style={{
+                  left: `calc(${(loopStart / duration) * 100}% + 0.75rem)`,
+                  width: `${((loopEnd - loopStart) / duration) * 100}%`
+                }}
+              />
+            )}
+
+            {!toneState.isLoaded && audioFile && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm rounded-lg z-20">
+                <div className="text-center bg-black/50 p-6 rounded-lg border border-purple-500/30">
+                  <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                  <p className="text-white font-semibold mb-1">Loading Audio</p>
+                  <p className="text-gray-400 text-xs">Initializing Tone.js engine...</p>
+                  <p className="text-gray-500 text-xs mt-2">{audioFile.name}</p>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Time Display */}
@@ -507,25 +724,6 @@ export default function LocalFilePlayer() {
               </button>
             </div>
 
-            {/* Loop Toggle */}
-            {loopStart !== null && loopEnd !== null && (
-              <div className="flex items-center justify-between pt-2 border-t border-white/10">
-                <span className="text-sm text-gray-300">Enable Loop</span>
-                <button
-                  onClick={() => setLoopEnabled(!loopEnabled)}
-                  className={`relative w-12 h-6 rounded-full transition-colors ${
-                    loopEnabled ? 'bg-green-600' : 'bg-white/20'
-                  }`}
-                >
-                  <div
-                    className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                      loopEnabled ? 'transform translate-x-6' : ''
-                    }`}
-                  />
-                </button>
-              </div>
-            )}
-
             {/* Instructions */}
             {loopStart === null && (
               <p className="text-xs text-gray-400 text-center">
@@ -550,25 +748,31 @@ export default function LocalFilePlayer() {
               type="range"
               min="0.25"
               max="2"
-              step="0.01"
+              step={isShiftPressed ? "0.001" : "0.01"}
               value={tempo}
               onChange={(e) => handleTempoChange(parseFloat(e.target.value))}
-              className="w-full h-2 bg-white/20 rounded-lg appearance-none cursor-pointer accent-purple-600"
+              className={`w-full h-2 bg-white/20 rounded-lg appearance-none cursor-pointer accent-purple-600 ${isShiftPressed ? 'ring-2 ring-yellow-400' : ''}`}
+              title={isShiftPressed ? 'Fine-tune mode (Shift held)' : 'Hold Shift for fine-tune mode'}
             />
 
             {/* Tempo Presets */}
             <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5 sm:gap-2">
-              {speedOptions.map((tempoOption) => (
+              {speedOptions.map((option) => (
                 <button
-                  key={tempoOption}
-                  onClick={() => handleTempoChange(tempoOption)}
-                  className={`py-1.5 sm:py-2 px-2 sm:px-3 rounded-lg text-xs sm:text-sm font-medium transition-all ${
-                    tempo === tempoOption
+                  key={option.value}
+                  onClick={() => handleTempoChange(option.value)}
+                  className={`py-1.5 sm:py-2 px-2 sm:px-3 rounded-lg text-xs sm:text-sm font-medium transition-all group relative ${
+                    tempo === option.value
                       ? 'bg-purple-600 text-white'
                       : 'bg-white/10 text-gray-300 hover:bg-white/20'
                   }`}
+                  title={option.name}
                 >
-                  {tempoOption}x
+                  <span className="block sm:hidden">{option.label}</span>
+                  <span className="hidden sm:block">{option.label}</span>
+                  <span className="hidden group-hover:block absolute -top-8 left-1/2 -translate-x-1/2 bg-black/90 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
+                    {option.name}
+                  </span>
                 </button>
               ))}
             </div>
@@ -579,7 +783,7 @@ export default function LocalFilePlayer() {
             <div className="flex items-center justify-between">
               <label className="text-white font-semibold text-sm sm:text-base">Pitch Shift</label>
               <span className="text-green-400 font-bold text-sm sm:text-base">
-                {pitch > 0 ? '+' : ''}{pitch} semitones
+                {pitch > 0 ? '+' : ''}{pitch % 1 === 0 ? pitch : pitch.toFixed(1)} semitones
               </span>
             </div>
 
@@ -587,10 +791,11 @@ export default function LocalFilePlayer() {
               type="range"
               min="-12"
               max="12"
-              step="1"
+              step={isShiftPressed ? "0.1" : "1"}
               value={pitch}
-              onChange={(e) => handlePitchChange(parseInt(e.target.value))}
-              className="w-full h-2 bg-white/20 rounded-lg appearance-none cursor-pointer accent-green-600"
+              onChange={(e) => handlePitchChange(parseFloat(e.target.value))}
+              className={`w-full h-2 bg-white/20 rounded-lg appearance-none cursor-pointer accent-green-600 ${isShiftPressed ? 'ring-2 ring-yellow-400' : ''}`}
+              title={isShiftPressed ? 'Fine-tune mode (Shift held)' : 'Hold Shift for fine-tune mode'}
             />
 
             {/* Pitch Presets */}
@@ -647,28 +852,32 @@ export default function LocalFilePlayer() {
               </button>
             </div>
 
-            <p className="text-xs text-gray-400 text-center">
-              Change pitch without affecting tempo • 1 semitone = 1 piano key
-            </p>
+            <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-2">
+              <p className="text-xs text-purple-300 text-center">
+                ✨ Powered by Tone.js • Professional pitch-shifting • Crystal clear audio
+              </p>
+            </div>
           </div>
 
           {/* Export Audio */}
           <div className="bg-gradient-to-r from-purple-600/20 to-pink-600/20 rounded-lg sm:rounded-xl p-3 sm:p-4 space-y-2 sm:space-y-3 border border-purple-500/30">
-            <div className="flex items-center gap-2">
-              <Download className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" />
-              <label className="text-white font-semibold text-sm sm:text-base">
-                Professional Export
-                <span className="ml-2 px-2 py-0.5 bg-green-500/20 text-green-400 text-xs rounded-full border border-green-500/30">
-                  Studio Quality
-                </span>
-              </label>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Download className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400" />
+                <label className="text-white font-semibold text-sm sm:text-base">
+                  Export Audio
+                </label>
+              </div>
               {ffmpegLoading && (
-                <span className="text-xs text-gray-400 hidden sm:inline">(Loading...)</span>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-xs text-purple-400">Loading FFmpeg...</span>
+                </div>
               )}
             </div>
 
             <p className="text-xs sm:text-sm text-gray-300">
-              <span className="font-semibold">Professional FFmpeg processing</span> - Export with {tempo}x tempo using studio-grade algorithms (zero artifacts, perfect pitch preservation)
+              Export your audio with {tempo}x tempo{pitch !== 0 && ` and ${pitch > 0 ? '+' : ''}${pitch} semitone pitch shift`} using FFmpeg processing
             </p>
 
             {/* Format Selection */}
@@ -736,15 +945,26 @@ export default function LocalFilePlayer() {
                 FFmpeg failed to load. Please refresh the page.
               </p>
             )}
-
-            {(tempo !== 1 || pitch !== 0) && ffmpegLoaded && (
-              <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-2">
-                <p className="text-xs text-green-300 text-center">
-                  ✨ Professional quality: Output will be {tempo < 1 ? 'slowed to' : tempo > 1 ? 'accelerated to' : 'at'} {tempo}x tempo{pitch !== 0 && ` with ${pitch > 0 ? '+' : ''}${pitch} semitone pitch shift`} - studio DAW quality!
-                </p>
-              </div>
-            )}
           </div>
+
+          {/* Error Display */}
+          {toneState.error && (
+            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 sm:p-4">
+              <div className="flex items-start gap-2">
+                <span className="text-red-400 text-lg">⚠️</span>
+                <div className="flex-1">
+                  <p className="text-red-300 font-semibold text-sm">Audio Loading Error</p>
+                  <p className="text-red-400 text-xs mt-1">{toneState.error}</p>
+                  <button
+                    onClick={handleRemoveFile}
+                    className="mt-2 px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded text-xs transition-colors"
+                  >
+                    Try Another File
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

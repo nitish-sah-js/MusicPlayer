@@ -16,6 +16,9 @@ export default function KeyboardShortcutsHelp({ isOpen, onClose }: KeyboardShort
     { key: 'A', action: 'Set loop start point' },
     { key: 'B', action: 'Set loop end point' },
     { key: 'C', action: 'Clear loop' },
+    { key: 'R', action: 'Reset speed & pitch to normal' },
+    { key: 'L', action: 'Toggle loop on/off' },
+    { key: 'M', action: 'Mute / Unmute' },
     { key: '?', action: 'Show this help' },
   ]
 

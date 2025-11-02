@@ -301,7 +301,7 @@ export default function YouTubePlayer() {
       alert('Audio downloaded successfully!')
     } catch (error: any) {
       console.error('Download error:', error)
-      alert(`Failed to download audio: ${error.message}`)
+      alert(`${error.message}`)
     } finally {
       setIsDownloading(false)
     }
